@@ -1,7 +1,8 @@
 use async_std::{
-    net::TcpListener, task::spawn,
-    prelude::*,
     io::{Read, Write},
+    net::TcpListener,
+    prelude::*,
+    task::spawn,
 };
 use futures::stream::StreamExt;
 
@@ -16,10 +17,12 @@ async fn main() {
 
     // init listener
     let ln = TcpListener::bind(addr).await.unwrap();
-    ln.incoming().for_each_concurrent(None, |tcp_stream| async move {
-        let tcp_stream = tcp_stream.unwrap();
-        spawn(handle_connection(tcp_stream));
-    }).await;
+    ln.incoming()
+        .for_each_concurrent(None, |tcp_stream| async move {
+            let tcp_stream = tcp_stream.unwrap();
+            spawn(handle_connection(tcp_stream));
+        })
+        .await;
 
     println!("server stop.")
 }
@@ -27,14 +30,14 @@ async fn main() {
 async fn handle_connection(mut stream: impl Read + Write + Unpin) {
     // request read
     let mut buffer = [0; 1024];
-    let n = match stream.read(&mut buffer).await {
+    let read_len = match stream.read(&mut buffer).await {
         Ok(n) => n,
         Err(err) => {
             println!("stream read error: {:?}", err);
             return;
         }
     };
-    let received = std::str::from_utf8(&buffer[0..n]).expect("valid utf8");
+    let received = std::str::from_utf8(&buffer[0..read_len]).expect("valid utf8");
     println!("stream read: {:?}", received);
 
     println!("conn handled.")
