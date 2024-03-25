@@ -50,14 +50,25 @@ async fn handle_connection(stream: TcpStream, upstream_addr: &str) {
             return;
         }
     };
-    // clone stream for bidirection forwarding
-    let wstream = stream.clone();
-    let wupstream = upstream.clone();
+    // we need read and write for same TcpStream object (concurently)
+    // we need pass two mut ref for same object (one as Read and one as Write traits)
+    // but it is not allowed by borrow rules, we can have only one mut ref
+    // trick solution
+    // we make two reference (&TcpStream) allowed by borrow rules
+    // for each referenct we get separate mutable reference (&mut &TcpStream)
+    // we do not have issue with TcpStream because mutual reference required only for Read/Write traits
+    // TcpStream itself do not require mutability
+    // TcpStream implements two version of Read/Write traits one for TcpStream another for &TcpStream
+    // so when we pass &mut &TcpStream we call &TcpStream Read/Write impl
+    // (we also can just clone TcpStream, see prev commit implementation)
+    // (clone of TcpStream relativly cheap because it is just wrap to socket file descriptor)
+    let (rstream, wstream) = &mut (&stream, &stream);
+    let (rupstream, wupstream) = &mut (&upstream, &upstream);
 
     // forward streams
     if let Err(err) = try_join!(
-        forwarder("stream to upstream", stream, wupstream),
-        forwarder("upstream to stream", upstream, wstream),
+        forwarder("stream to upstream", rstream, wupstream),
+        forwarder("upstream to stream", rupstream, wstream),
     ) {
         println!("conn handler: forwarder err: {}", err)
     };
