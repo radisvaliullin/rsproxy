@@ -51,13 +51,13 @@ async fn handle_connection(stream: TcpStream, upstream_addr: &str) {
         }
     };
     // clone stream for bidirection forwarding
-    let stream2 = stream.clone();
-    let upstream2 = upstream.clone();
+    let wstream = stream.clone();
+    let wupstream = upstream.clone();
 
     // forward streams
     if let Err(err) = try_join!(
-        forwarder("stream to upstream", stream, upstream),
-        forwarder("upstream to stream", upstream2, stream2),
+        forwarder("stream to upstream", stream, wupstream),
+        forwarder("upstream to stream", upstream, wstream),
     ) {
         println!("conn handler: forwarder err: {}", err)
     };
