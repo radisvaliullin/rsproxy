@@ -17,36 +17,37 @@ async fn main() {
 
     // config hardcode
     let addr = "0.0.0.0:4040";
-    let upstream_addr = "0.0.0.0:4044";
+    // address of server where proxy forward stream
+    let target_server_addr = "0.0.0.0:4044";
 
     // init listener
     let ln = TcpListener::bind(addr).await.unwrap();
     ln.incoming()
         .for_each_concurrent(None, |tcp_stream| async move {
             let stream = tcp_stream.unwrap();
-            spawn(handle_connection(stream, upstream_addr));
+            spawn(handle_session(stream, target_server_addr));
         })
         .await;
 
     println!("server stop.")
 }
 
-async fn handle_connection(stream: TcpStream, upstream_addr: &str) {
+async fn handle_session(stream: TcpStream, server_addr: &str) {
     println!("conn handler: handling.");
 
-    // dial upstream connection
-    let upstream_conn_fut = TcpStream::connect(upstream_addr);
-    let uconn_timeout = Duration::from_millis(15_000);
-    let upstream = match future::timeout(uconn_timeout, upstream_conn_fut).await {
-        Ok(uconn_res) => match uconn_res {
+    // dial connection to server
+    let server_conn_fut = TcpStream::connect(server_addr);
+    let sconn_timeout = Duration::from_millis(15_000);
+    let server_stream = match future::timeout(sconn_timeout, server_conn_fut).await {
+        Ok(conn_res) => match conn_res {
             Ok(stream) => stream,
             Err(err) => {
-                println!("conn handler: upstream conn error: {:?}", err);
+                println!("conn handler: server conn error: {:?}", err);
                 return;
             }
         },
         Err(err) => {
-            println!("conn handler: upstream conn timeout error: {:?}", err);
+            println!("conn handler: server conn timeout error: {:?}", err);
             return;
         }
     };
@@ -63,12 +64,12 @@ async fn handle_connection(stream: TcpStream, upstream_addr: &str) {
     // (we also can just clone TcpStream, see prev commit implementation)
     // (clone of TcpStream relativly cheap because it is just wrap to socket file descriptor)
     let (rstream, wstream) = &mut (&stream, &stream);
-    let (rupstream, wupstream) = &mut (&upstream, &upstream);
+    let (rsrvstream, wsrvstream) = &mut (&server_stream, &server_stream);
 
     // forward streams
     if let Err(err) = try_join!(
-        forwarder("stream to upstream", rstream, wupstream),
-        forwarder("upstream to stream", rupstream, wstream),
+        forwarder("client to server", rstream, wsrvstream),
+        forwarder("server to client", rsrvstream, wstream),
     ) {
         println!("conn handler: forwarder err: {}", err)
     };
@@ -76,22 +77,24 @@ async fn handle_connection(stream: TcpStream, upstream_addr: &str) {
     println!("conn handler: done.");
 }
 
+// forwarder
+// forward from upstream to downstream
 async fn forwarder(
     name: &str,
-    mut rstream: impl Read + Unpin,
-    mut wstream: impl Write + Unpin,
+    mut upstream: impl Read + Unpin,
+    mut downstream: impl Write + Unpin,
 ) -> Result<(), Error> {
     loop {
         // read
         let mut buffer = [0; 1024];
-        let read_len = match rstream.read(&mut buffer).await {
+        let read_len = match upstream.read(&mut buffer).await {
             Ok(0) => {
-                println!("forwarder: rstream read 0 bytes, other side close connection");
+                println!("forwarder: upstream read 0 bytes, other side close connection");
                 return Result::Err(Error::from(ErrorKind::UnexpectedEof));
             }
             Ok(n) => n,
             Err(err) => {
-                println!("forwarder: rstream read error: {:?}", err);
+                println!("forwarder: upstream read error: {:?}", err);
                 return Result::Err(err);
             }
         };
@@ -101,10 +104,10 @@ async fn forwarder(
         // println!("{} read: {:?}", name, received);
 
         // write
-        let write_len = match wstream.write(&buffer[0..read_len]).await {
+        let write_len = match downstream.write(&buffer[0..read_len]).await {
             Ok(n) => n,
             Err(err) => {
-                println!("forwarder: wstream write error: {:?}", err);
+                println!("forwarder: downstream write error: {:?}", err);
                 return Result::Err(err);
             }
         };
